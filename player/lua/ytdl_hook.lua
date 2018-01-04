@@ -14,6 +14,7 @@ local ytdl = {
 }
 
 local chapter_list = {}
+local parsed_command = {}
 
 local function exec(args)
     local ret = utils.subprocess({args = args})
@@ -120,6 +121,33 @@ local function is_blacklisted(url)
         end
     end
     return false
+end
+
+local function run_ytdl(url)
+    local start_time = os.clock()
+    unpack = unpack or table.unpack
+    local command = {unpack(parsed_command)}
+    table.insert(command, url)
+    msg.debug("Running: " .. table.concat(command, ' '))
+    local es, json, result = exec(command)
+
+    if (es < 0) or (json == nil) or (json == "") then
+        local err = ""
+        if not result.killed_by_us then
+            err = "youtube-dl failed"
+        end
+        return nil, err
+    end
+
+    local json, err = utils.parse_json(json)
+
+    if (json == nil) then
+        return nil, "failed to parse JSON data: " .. err
+    end
+
+    msg.verbose("youtube-dl succeeded!")
+    msg.debug('ytdl parsing took '..os.clock()-start_time..' seconds')
+    return json, ""
 end
 
 local function make_absolute_url(base_url, url)
@@ -360,26 +388,13 @@ mp.add_hook("on_load_fail", 10, function ()
             table.insert(command, "--all-subs")
         end
         table.insert(command, "--")
-        table.insert(command, url)
-        msg.debug("Running: " .. table.concat(command,' '))
-        local es, json, result = exec(command)
+        parsed_command = command
 
-        if (es < 0) or (json == nil) or (json == "") then
-            if not result.killed_by_us then
-                msg.error("youtube-dl failed")
-            end
+        local json, err = run_ytdl(url)
+        if not json then
+            msg.error(err)
             return
         end
-
-        local json, err = utils.parse_json(json)
-
-        if (json == nil) then
-            msg.error("failed to parse JSON data: " .. err)
-            return
-        end
-
-        msg.verbose("youtube-dl succeeded!")
-        msg.debug('ytdl parsing took '..os.clock()-start_time..' seconds')
 
         -- what did we get?
         if not (json["direct"] == nil) and (json["direct"] == true) then
