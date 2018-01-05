@@ -15,6 +15,8 @@ local ytdl = {
 
 local chapter_list = {}
 local parsed_command = {}
+local video_id = nil
+local audio_id = nil
 
 local function exec(args)
     local ret = utils.subprocess({args = args})
@@ -219,11 +221,59 @@ local function edl_track_joined(fragments, protocol, is_live, base)
     return edl .. table.concat(parts, ";") .. ";"
 end
 
+local function has_native_dash_demuxer()
+    local demuxers = mp.get_property_native("demuxer-lavf-list")
+    for _,v in ipairs(demuxers) do
+        if v == "dash" then
+            return true
+        end
+    end
+    return false
+end
+
+local function proto_is_dash(json)
+    local reqfmts = json["requested_formats"]
+    return (reqfmts ~= nil and reqfmts[1]["protocol"] == "http_dash_segments")
+           or json["protocol"] == "http_dash_segments"
+end
+
 local function add_single_video(json)
     local streamurl = ""
 
+    if has_native_dash_demuxer() and proto_is_dash(json) then
+        local mpd_url = json["requested_formats"][1]["manifest_url"] or json["manifest_url"]
+        if not mpd_url then
+            msg.error("No manifest URL found in JSON data.")
+            return
+        end
+
+        local mpd_json, err = run_ytdl(mpd_url)
+        if not mpd_json or not mpd_json.requested_formats or not mpd_json.format_id then
+            msg.error(err)
+            msg.error("Manifest couldn't be parsed.")
+            return
+        end
+
+        streamurl = mpd_url
+
+        if mpd_json.requested_formats then
+            for _, track in pairs(mpd_json.requested_formats) do
+                if track.acodec and track.acodec ~= "none" then
+                    audio_id = track.format_id
+                elseif track.vcodec and track.vcodec ~= "none" then
+                    video_id = track.format_id
+                end
+            end
+        elseif mpd_json.format_id then
+            if mpd_json.acodec and mpd_json.acodec ~= "none" then
+                audio_id = mpd_json.format_id
+            elseif mpd_json.vcodec and mpd_json.vcodec ~= "none" then
+                video_id = track.format_id
+            end
+        end
+
     -- DASH/split tracks
-    if not (json["requested_formats"] == nil) then
+    elseif not (json["requested_formats"] == nil) then
         for _, track in pairs(json.requested_formats) do
             local edl_track = nil
             edl_track = edl_track_joined(track.fragments,
@@ -513,4 +563,7 @@ mp.add_hook("on_preloaded", 10, function ()
         mp.set_property_native("chapter-list", chapter_list)
         chapter_list = {}
     end
+
+    video_id = nil
+    audio_id = nil
 end)
