@@ -239,37 +239,25 @@ end
 
 local function add_single_video(json)
     local streamurl = ""
+    local max_bitrate = 0
 
     if has_native_dash_demuxer() and proto_is_dash(json) then
-        local mpd_url = json["requested_formats"][1]["manifest_url"] or json["manifest_url"]
+        local mpd_url = json["requested_formats"][1]["manifest_url"] or
+            json["manifest_url"]
         if not mpd_url then
             msg.error("No manifest URL found in JSON data.")
             return
         end
 
-        local mpd_json, err = run_ytdl(mpd_url)
-        if not mpd_json or not mpd_json.requested_formats or not mpd_json.format_id then
-            msg.error(err)
-            msg.error("Manifest couldn't be parsed.")
-            return
-        end
-
         streamurl = mpd_url
 
-        if mpd_json.requested_formats then
-            for _, track in pairs(mpd_json.requested_formats) do
-                if track.acodec and track.acodec ~= "none" then
-                    audio_id = track.format_id
-                elseif track.vcodec and track.vcodec ~= "none" then
-                    video_id = track.format_id
-                end
+        if json.requested_formats then
+            for _, track in pairs(json.requested_formats) do
+                max_bitrate = track.tbr > max_bitrate and
+                    track.tbr or max_bitrate
             end
-        elseif mpd_json.format_id then
-            if mpd_json.acodec and mpd_json.acodec ~= "none" then
-                audio_id = mpd_json.format_id
-            elseif mpd_json.vcodec and mpd_json.vcodec ~= "none" then
-                video_id = track.format_id
-            end
+        elseif json.tbr then
+            max_bitrate = track.tbr > max_bitrate and track.tbr or max_bitrate
         end
 
     -- DASH/split tracks
@@ -308,6 +296,13 @@ local function add_single_video(json)
     mp.set_property("stream-open-filename", streamurl:gsub("^data:", "data://", 1))
 
     mp.set_property("file-local-options/force-media-title", json.title)
+
+    -- set hls-bitrate for dash track selection
+    if max_bitrate > 0 and
+        not option_was_set("hls-bitrate") and
+        not option_was_set_locally("hls-bitrate") then
+        mp.set_property_native('file-local-options/hls-bitrate', max_bitrate*1000)
+    end
 
     -- add subtitles
     if not (json.requested_subtitles == nil) then
